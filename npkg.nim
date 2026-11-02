@@ -1,4 +1,4 @@
-kimport std/[parseopt, os, strutils, json, uri, times, osproc, httpclient]
+import std/[parseopt, os, strutils, json, uri, times, osproc, httpclient, streams]
 
 when defined(posix):
   import posix
@@ -29,28 +29,31 @@ proc downloadWithPacNim(url, outputPath, packageName: string): bool =
   try:
     printInfo("Downloading " & packageName & "...")
     
-    # Bağlantıyı aç ve içeriği akış (stream) şeklinde al
-    let response = client.getContent(url) # Alternatif olarak progress takipli stream
-    # Daha detaylı progress için stream tabanlı yaklaşım:
     var respStream = client.get(url)
     if respStream.code != Http200:
       printError("Failed to download: HTTP status " & $respStream.code)
       return false
 
-    let totalSize = respStream.headers.getOrDefault("Content-Length").parseInt
+    # Content-Length güvenli okuma (boş gelirse crash olmasın)
+    let contentLengthStr = respStream.headers.getOrDefault("Content-Length")
+    var totalSize = 0
+    if contentLengthStr != "":
+      try:
+        totalSize = parseInt(contentLengthStr)
+      except:
+        totalSize = 0
+
     var downloaded: int = 0
     let file = open(outputPath, fmWrite)
     defer: file.close()
 
-    # Akışı parça parça oku ve Pac-Nim'i hareket ettir
     let stream = respStream.bodyStream
-    var buffer = newString(8192)
     
     while true:
-      let readCount = stream.read(buffer)
-      if readCount <= 0: break
-      file.write(buffer.toOpenArray(0, readCount - 1))
-      downloaded += readCount
+      let chunk = stream.readStr(8192)
+      if chunk.len == 0: break
+      file.write(chunk)
+      downloaded += chunk.len
       
       if totalSize > 0:
         let width = 25
@@ -69,7 +72,11 @@ proc downloadWithPacNim(url, outputPath, packageName: string): bool =
             
         let pctStr = align($int(percent * 100), 3)
         stdout.write("\r[" & bar & "] " & pctStr & "% (" & $int(downloaded div 1024) & " KB)")
-        stdout.flushFile()
+      else:
+        # Boyut bilinmiyorsa sayaç göster
+        stdout.write("\rDownloading... " & $int(downloaded div 1024) & " KB downloaded")
+        
+      stdout.flushFile()
 
     stdout.write("\n")
     return true
@@ -79,7 +86,7 @@ proc downloadWithPacNim(url, outputPath, packageName: string): bool =
   finally:
     client.close()
 
-# --- ROOT YETKİ KONTROLÜ ---
+
 proc ensureRoot() =
   when defined(posix):
     if geteuid() != 0:

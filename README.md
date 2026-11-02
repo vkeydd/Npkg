@@ -34,7 +34,7 @@ Make sure you have the following tools installed on your system:
 ### Building from Source with GNU Make(recomended)
 ```
 
-git clone https://github.com/vkeydd/Npkg.git
+git clone -b master https://github.com/vkeydd/Npkg.git
 cd Npkg
 
 # Build the release binary
@@ -46,7 +46,7 @@ sudo make install
 ---
 ### Or using nimble
 ``` 
-git clone https://github.com/vkeydd/Npkg.git
+git clone -b master https://github.com/vkeydd/Npkg.git
 cd Npkg
 # Then install with Nimble
 sudo nimble install

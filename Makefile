@@ -10,8 +10,7 @@ all: build
 
 build:
 	@echo "Building $(BIN) with Nim (release mode)..."
-	$(CC) c -d:release --opt:speed $(SRC)
-
+	$(CC) c -d:release --opt:speed -d:ssl $(SRC)
 install: build
 	@echo "Installing $(BIN) system-wide..."
 	install -Dm755 $(BIN) $(PREFIX)/bin/$(BIN)
