@@ -12,7 +12,7 @@
 
 ---
 
-## 🧠 Why Nim?
+##  Why Nim?👑️
 
 You might wonder why **Nim** was chosen to build `npkg` instead of Shell, Python, or Go. Here is why Nim is the ideal tool for system-level utilities:
 
