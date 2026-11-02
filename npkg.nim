@@ -1,4 +1,4 @@
-import std/[parseopt, os, strutils, json, uri, times, osproc]
+kimport std/[parseopt, os, strutils, json, uri, times, osproc, httpclient]
 
 when defined(posix):
   import posix
@@ -22,6 +22,62 @@ proc printInfo(msg: string) = echo Cyan, "[INFO] ", Reset, msg
 proc printSuccess(msg: string) = echo Green, "[SUCCESS] ", Reset, msg
 proc printError(msg: string) = echo Red, "[ERROR] ", Reset, msg
 proc printWarn(msg: string) = echo Yellow, "[WARN] ", Reset, msg
+
+# --- PAC-NIM ANİMASYONLU İNDİRME FONKSİYONU ---
+proc downloadWithPacNim(url, outputPath, packageName: string): bool =
+  var client = newHttpClient(userAgent = "npkg-manager")
+  try:
+    printInfo("Downloading " & packageName & "...")
+    
+    # Bağlantıyı aç ve içeriği akış (stream) şeklinde al
+    let response = client.getContent(url) # Alternatif olarak progress takipli stream
+    # Daha detaylı progress için stream tabanlı yaklaşım:
+    var respStream = client.get(url)
+    if respStream.code != Http200:
+      printError("Failed to download: HTTP status " & $respStream.code)
+      return false
+
+    let totalSize = respStream.headers.getOrDefault("Content-Length").parseInt
+    var downloaded: int = 0
+    let file = open(outputPath, fmWrite)
+    defer: file.close()
+
+    # Akışı parça parça oku ve Pac-Nim'i hareket ettir
+    let stream = respStream.bodyStream
+    var buffer = newString(8192)
+    
+    while true:
+      let readCount = stream.read(buffer)
+      if readCount <= 0: break
+      file.write(buffer.toOpenArray(0, readCount - 1))
+      downloaded += readCount
+      
+      if totalSize > 0:
+        let width = 25
+        let percent = float(downloaded) / float(totalSize)
+        let filled = int(percent * float(width))
+        let pacman = "\e[1;33mC\e[0m" # Sarı Pac-Man
+        
+        var bar = ""
+        for i in 0 ..< width:
+          if i == filled:
+            bar.add(pacman)
+          elif i < filled:
+            bar.add(" ")
+          else:
+            bar.add("·")
+            
+        let pctStr = align($int(percent * 100), 3)
+        stdout.write("\r[" & bar & "] " & pctStr & "% (" & $int(downloaded div 1024) & " KB)")
+        stdout.flushFile()
+
+    stdout.write("\n")
+    return true
+  except CatchableError as e:
+    printError("Download error: " & e.msg)
+    return false
+  finally:
+    client.close()
 
 # --- ROOT YETKİ KONTROLÜ ---
 proc ensureRoot() =
@@ -116,7 +172,7 @@ proc installDependencies(extractedPath: string) =
     except CatchableError as e:
       printWarn("Failed to parse pkg.json for dependencies: " & e.msg)
 
-# --- İNDİRME VE KURULUM (Curl + Tar + Akıllı Dal Yönetimi) ---
+# --- İNDİRME VE KURULUM (Pac-Nim + Tar + Akıllı Dal Yönetimi) ---
 proc downloadAndExtract(tarGzUrl, packageName: string) =
   ensureRoot()
   
@@ -124,11 +180,7 @@ proc downloadAndExtract(tarGzUrl, packageName: string) =
   let targetDir = InstallDir / packageName
 
   try:
-    printInfo("Downloading " & packageName & " from " & tarGzUrl)
-    
-    let curlCmd = "curl -L -s -o " & quoteShell(tmpFile) & " " & quoteShell(tarGzUrl)
-    if execShellCmd(curlCmd) != 0:
-      printError("Failed to download package using curl.")
+    if not downloadWithPacNim(tarGzUrl, tmpFile, packageName):
       return
 
     if not dirExists(InstallDir):
@@ -160,36 +212,37 @@ proc downloadAndExtract(tarGzUrl, packageName: string) =
   finally:
     if fileExists(tmpFile):
       removeFile(tmpFile)
+
 # --- OTOMATİK İZİN VE PATH (SYMLINK) BAĞLAMA ---
-    let globalBin = "/usr/local/bin" / packageName
-    var foundBin = ""
+proc linkBinary(targetDir, packageName: string) =
+  let globalBin = "/usr/local/bin" / packageName
+  var foundBin = ""
 
-    # Olası binary konumlarını sırayla kontrol et
-    let candidate1 = targetDir / packageName
-    let candidate2 = targetDir / "bin" / packageName
+  let candidate1 = targetDir / packageName
+  let candidate2 = targetDir / "bin" / packageName
 
-    if fileExists(candidate1):
-      foundBin = candidate1
-    elif fileExists(candidate2):
-      foundBin = candidate2
+  if fileExists(candidate1):
+    foundBin = candidate1
+  elif fileExists(candidate2):
+    foundBin = candidate2
+  else:
+    for kind, path in walkDir(targetDir):
+      if kind == pcFile and not path.endsWith(".md") and not path.endsWith(".json") and not path.endsWith(".txt"):
+        foundBin = path
+        break
+
+  if foundBin != "" and fileExists(foundBin):
+    discard execShellCmd("chmod +x " & quoteShell(foundBin))
+    
+    if fileExists(globalBin): removeFile(globalBin)
+    let symCmd = "ln -s " & quoteShell(foundBin) & " " & quoteShell(globalBin)
+    if execShellCmd(symCmd) == 0:
+      printSuccess("Successfully linked " & packageName & " to /usr/local/bin/" & packageName)
     else:
-      # Eğer net bulunamadıysa, dizindeki ilk çalıştırılabilir dosyayı bulmaya çalış
-      for kind, path in walkDir(targetDir):
-        if kind == pcFile and not path.endsWith(".md") and not path.endsWith(".json") and not path.endsWith(".txt"):
-          foundBin = path
-          break
+      printWarn("Failed to create symlink for " & packageName)
+  else:
+    printWarn("Binary not found automatically. You can manually link it from: " & targetDir)
 
-    if foundBin != "" and fileExists(foundBin):
-      discard execShellCmd("chmod +x " & quoteShell(foundBin))
-      
-      if fileExists(globalBin): removeFile(globalBin)
-      let symCmd = "ln -s " & quoteShell(foundBin) & " " & quoteShell(globalBin)
-      if execShellCmd(symCmd) == 0:
-        printSuccess("Successfully linked " & packageName & " to /usr/local/bin/" & packageName)
-      else:
-        printWarn("Failed to create symlink for " & packageName)
-    else:
-      printWarn("Binary not found automatically. You can manually link it from: " & targetDir)
 # --- GİRDİ ÇÖZÜMLEME VE AKILLI DAL YÖNETİMİ ---
 proc addPackage(input: string) =
   var tarGzUrl = ""
@@ -201,6 +254,7 @@ proc addPackage(input: string) =
     if packageName == "":
       packageName = "custom_pkg"
     downloadAndExtract(tarGzUrl, packageName)
+    linkBinary(InstallDir / packageName, packageName)
   elif input.contains("/"):
     let parts = input.split('/')
     if parts.len >= 2:
@@ -222,6 +276,7 @@ proc addPackage(input: string) =
       if execShellCmd(testTar) == 0:
         if fileExists(tmpFile): removeFile(tmpFile)
         downloadAndExtract(mainUrl, packageName)
+        linkBinary(InstallDir / packageName, packageName)
       else:
         printInfo("'main' branch not found, trying 'master'...")
         let curlMaster = "curl -L -s -o " & quoteShell(tmpFile) & " " & quoteShell(masterUrl)
@@ -230,6 +285,7 @@ proc addPackage(input: string) =
         if execShellCmd(testTar) == 0:
           if fileExists(tmpFile): removeFile(tmpFile)
           downloadAndExtract(masterUrl, packageName)
+          linkBinary(InstallDir / packageName, packageName)
         else:
           printError("Could not find a valid 'main' or 'master' branch for this repository.")
           if fileExists(tmpFile): removeFile(tmpFile)
@@ -242,7 +298,6 @@ proc addPackage(input: string) =
     return
 
 # --- KALDIRMA (REMOVE) ---
-# --- KALDIRMA (REMOVE) ---
 proc removePackage(packageName: string) =
   ensureRoot()
   
@@ -251,19 +306,16 @@ proc removePackage(packageName: string) =
   
   var cleaned = false
 
-  # 1. /usr/local/bin altındaki symlink'i veya dosyayı temizle
   if fileExists(globalBin) or symlinkExists(globalBin):
     removeFile(globalBin)
     printInfo("Removed binary symlink: " & globalBin)
     cleaned = true
 
-  # 2. /opt/npkg/ altındaki paket klasörünü temizle
   if dirExists(targetDir):
     removeDir(targetDir)
     printInfo("Removed package directory: " & targetDir)
     cleaned = true
     
-  # 3. Registry kaydını güncelle
   var reg = loadRegistry()
   if reg.hasKey(packageName):
     reg.delete(packageName)
@@ -274,6 +326,7 @@ proc removePackage(packageName: string) =
     printSuccess("Successfully removed package: " & packageName)
   else:
     printError("Package not found: " & packageName)
+
 # --- GÜNCELLEME (UPDATE) ---
 proc updatePackages() =
   ensureRoot()
@@ -289,6 +342,7 @@ proc updatePackages() =
       let url = val["url"].getStr()
       printInfo("Updating: " & key)
       downloadAndExtract(url, key)
+      linkBinary(InstallDir / key, key)
   printSuccess("All packages updated successfully!")
 
 # --- YARDIM / KULLANIM ---

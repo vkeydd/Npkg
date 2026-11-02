@@ -33,8 +33,9 @@ Make sure you have the following tools installed on your system:
 
 ### Building from Source with GNU Make(recomended)
 ```
+
 git clone https://github.com/vkeydd/Npkg.git
-cd npkg
+cd Npkg
 
 # Build the release binary
 make
@@ -47,12 +48,13 @@ sudo make install
 ``` 
 git clone https://github.com/vkeydd/Npkg.git
 cd Npkg
-# Then instal with Nimble
+# Then install with Nimble
 sudo nimble install
 ``` 
 ## 💡 Usage
 
 Once installed, you can manage packages using straightforward commands:
+
 
 ### Add a Package
 Installs a repository system-wide (downloads, extracts, sets permissions, and symlinks):
